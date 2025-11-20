@@ -116,6 +116,9 @@ export default {
 };
 ///////////////////////////////////////////功能性函数//////////////////////////////////////////
 async function SOCKS5可用性验证(代理协议 = 'socks5', 代理参数) {
+    // 记录开始时间
+    const startTime = Date.now();
+    
     // 解析代理参数
     try {
         parsedSocks5Address = await 获取SOCKS5账号(代理参数);
@@ -123,7 +126,8 @@ async function SOCKS5可用性验证(代理协议 = 'socks5', 代理参数) {
         return {
             success: false,
             error: err.message,
-            proxy: 代理协议 + "://" + 代理参数
+            proxy: 代理协议 + "://" + 代理参数,
+            responseTime: Date.now() - startTime
         };
     }
 
@@ -135,14 +139,15 @@ async function SOCKS5可用性验证(代理协议 = 'socks5', 代理参数) {
     try {
         // 根据协议类型建立连接
         const tcpSocket = 代理协议 == 'socks5'
-            ? await socks5Connect('check.socks5.090227.xyz', 80, 3)
+            ? await socks5Connect('check.socks5.090227.xyz', 80)
             : await httpConnect('check.socks5.090227.xyz', 80);
 
         if (!tcpSocket) {
             return {
                 success: false,
                 error: '无法连接到代理服务器',
-                proxy: 代理协议 + "://" + 完整代理参数
+                proxy: 代理协议 + "://" + 完整代理参数,
+                responseTime: Date.now() - startTime
             };
         }
 
@@ -184,6 +189,7 @@ async function SOCKS5可用性验证(代理协议 = 'socks5', 代理参数) {
                 proxy: 代理协议 + "://" + 完整代理参数,
                 ip: ipMatch ? ipMatch[1] : 'N/A',
                 loc: locMatch ? locMatch[1] : 'N/A',
+                responseTime: Date.now() - startTime,
                 ...ipInfo
             };
         } catch (error) {
@@ -197,14 +203,16 @@ async function SOCKS5可用性验证(代理协议 = 'socks5', 代理参数) {
             return {
                 success: false,
                 error: error.message,
-                proxy: 代理协议 + "://" + 完整代理参数
+                proxy: 代理协议 + "://" + 完整代理参数,
+                responseTime: Date.now() - startTime
             };
         }
     } catch (error) {
         return {
             success: false,
             error: error.message,
-            proxy: 代理协议 + "://" + 代理参数
+            proxy: 代理协议 + "://" + 代理参数,
+            responseTime: Date.now() - startTime
         };
     }
 }
@@ -1261,7 +1269,7 @@ async function HTML(网站图标, 网络备案, img) {
             </div>
             
             <div class="info-card">
-                <h3>出口信息</h3>
+                <h3 id="exitInfoTitle">出口信息</h3>
                 <div class="info-content" id="exitInfo">
                     <div class="waiting">请输入代理链接并点击检查</div>
                 </div>
@@ -1480,20 +1488,26 @@ async function HTML(网站图标, 网络备案, img) {
             // 计算基础评分：(company + asn) / 2 * 5
             let baseScore = ((company + asn) / 2) * 5;
             
-            // 计算安全风险附加分：每个安全风险项增加 15%
+            // 计算安全风险附加分
             let riskAddition = 0;
-            const riskFlags = [
+            
+            // 检查虚假IP (Bogon)，如果是则增加100%
+            if (securityFlags.is_bogon === true) {
+                riskAddition += 1.0; // 虚假IP增加100%
+            }
+            
+            // 其他风险项各增加15%
+            const otherRiskFlags = [
                 securityFlags.is_crawler,   // 爬虫
                 securityFlags.is_proxy,     // 代理服务器
                 securityFlags.is_vpn,       // VPN
                 securityFlags.is_tor,       // Tor 网络
-                securityFlags.is_abuser,    // 滥用 IP
-                securityFlags.is_bogon      // 虚假 IP
+                securityFlags.is_abuser     // 滥用 IP
             ];
             
-            // 统计为 true 的风险项数量
-            const riskCount = riskFlags.filter(flag => flag === true).length;
-            riskAddition = riskCount * 0.15; // 每个风险项增加 15%
+            // 统计其他风险项中为 true 的数量
+            const otherRiskCount = otherRiskFlags.filter(flag => flag === true).length;
+            riskAddition += otherRiskCount * 0.15; // 每个风险项增加 15%
             
             // 最终评分 = 基础评分 + 风险附加分
             const finalScore = baseScore + riskAddition;
@@ -1512,6 +1526,18 @@ async function HTML(网站图标, 网络备案, img) {
             if (percentage >= 5) return 'badge-elevated';     // 黄色 5-14.99%
             if (percentage >= 0.25) return 'badge-low';          // 淡绿色 0.25-4.99%
             return 'badge-verylow';                              // 绿色 < 0.25%
+        }
+        
+        function getRiskLevelColor(riskLevel) {
+            // 根据风险等级返回对应的背景色
+            const colorMap = {
+                '极度危险': 'rgb(220, 38, 38)',      // 深红色
+                '高风险': 'rgb(239, 68, 68)',        // 红色
+                '轻微风险': 'rgb(249, 115, 22)',     // 橙色
+                '纯净': 'rgb(22, 163, 74)',        // 深绿色
+                '极度纯净':  'rgb(34, 197, 94)',        // 绿色
+            };
+            return colorMap[riskLevel] || 'rgb(100, 100, 100)';
         }
         
         function formatAbuseScorePercentage(score) {
@@ -1535,8 +1561,24 @@ async function HTML(网站图标, 网络备案, img) {
             return \`rgb(\${red}, \${green}, 0)\`;
         }
         
-        function formatInfoDisplay(data, containerId, showIPSelector = false) {
+        function formatInfoDisplay(data, containerId, showIPSelector = false, responseTime = null) {
             const container = document.getElementById(containerId);
+            
+            // 如果是出口信息，更新标题
+            if (containerId === 'exitInfo' && document.getElementById('exitInfoTitle')) {
+                const titleElement = document.getElementById('exitInfoTitle');
+                if (responseTime !== null && data && data.success) {
+                    // 将毫秒转换为秒，保留两位小数
+                    const seconds = (responseTime / 1000).toFixed(2);
+                    titleElement.textContent = \`出口信息(响应时间: \${seconds}秒)\`;
+                } else if (data && !data.success) {
+                    titleElement.textContent = '出口信息(代理不可用)';
+                } else if (data && data.error) {
+                    titleElement.textContent = '出口信息(代理不可用)';
+                } else {
+                    titleElement.textContent = '出口信息';
+                }
+            }
             
             if (!data || data.error) {
                 container.innerHTML = '<div class="error">数据获取失败，请稍后重试</div>';
@@ -1571,7 +1613,8 @@ async function HTML(网站图标, 网络备案, img) {
                 else if (scorePercentage >= 0.25) riskLevel = '纯净';
                 else riskLevel = '极度纯净';
                 
-                abuseScoreHTML = \`<span style="background-color: rgb(\${Math.min(255, Math.round(scorePercentage * 2.55))}, \${Math.min(255, Math.round((100 - scorePercentage) * 2.55))}, 0); color: white; padding: 4px 8px; border-radius: 5px; font-size: 0.9em; font-weight: bold;">\${formattedScore} \${riskLevel}</span>\`;
+                const riskLevelColor = getRiskLevelColor(riskLevel);
+                abuseScoreHTML = \`<span style="background-color: \${riskLevelColor}; color: white; padding: 4px 8px; border-radius: 5px; font-size: 0.9em; font-weight: bold;">\${formattedScore} \${riskLevel}</span>\`;
             } else {
                 abuseScoreHTML = '未知';
             }
@@ -1723,9 +1766,10 @@ async function HTML(网站图标, 网络备案, img) {
                 const proxyData = await proxyResponse.json();
                 
                 if (!proxyData.success) {
+                    document.getElementById('exitInfoTitle').textContent = '出口信息(代理不可用)';
                     exitInfo.innerHTML = '<div class="error">代理检测失败，请稍后重试</div>';
                 } else {
-                    formatInfoDisplay(proxyData, 'exitInfo', false);
+                    formatInfoDisplay(proxyData, 'exitInfo', false, proxyData.responseTime);
                 }
                 
             } catch (error) {
@@ -1777,6 +1821,8 @@ async function HTML(网站图标, 网络备案, img) {
             proxyInput.value = proxyUrl;
             
             checkBtn.disabled = true;
+            // 重置出口信息标题
+            document.getElementById('exitInfoTitle').textContent = '出口信息';
             entryInfo.innerHTML = '<div class="loading"><div class="spinner"></div>正在解析代理信息...</div>';
             exitInfo.innerHTML = '<div class="loading"><div class="spinner"></div>正在解析代理信息...</div>';
             
@@ -1841,17 +1887,20 @@ async function HTML(网站图标, 网络备案, img) {
                 if (exitPromise.status === 'fulfilled') {
                     const proxyData = exitPromise.value;
                     if (!proxyData.success) {
+                        document.getElementById('exitInfoTitle').textContent = '出口信息(代理不可用)';
                         exitInfo.innerHTML = \`<div class="error">代理检测失败: \${proxyData.error || '请检查代理链接'}</div>\`;
                     } else {
-                        formatInfoDisplay(proxyData, 'exitInfo', false);
+                        formatInfoDisplay(proxyData, 'exitInfo', false, proxyData.responseTime);
                     }
                 } else {
+                    document.getElementById('exitInfoTitle').textContent = '出口信息(代理不可用)';
                     exitInfo.innerHTML = '<div class="error">代理检测失败，请稍后重试</div>';
                 }
                 
             } catch (error) {
                 console.error('检测过程中出现错误:', error);
                 entryInfo.innerHTML = '<div class="error">检测失败，请稍后重试</div>';
+                document.getElementById('exitInfoTitle').textContent = '出口信息(代理不可用)';
                 exitInfo.innerHTML = '<div class="error">检测失败，请稍后重试</div>';
             } finally {
                 checkBtn.disabled = false;
